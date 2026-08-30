@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body {
+  /* Defense in depth: no single page should ever need page-level
+     horizontal scroll — any wide content (tables, charts) should scroll
+     within its own container via overflow-x-auto instead. If something
+     slips through, this clips it instead of letting the whole layout
+     (sidebar included) get shoved sideways. See app/layout.tsx's min-w-0
+     comment for the layout half of this fix. */
+  overflow-x: hidden;
+}
+
+body {
+  margin: 0;
+  background: #f4f7fb;
+  color: #0f172a;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.card {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+}

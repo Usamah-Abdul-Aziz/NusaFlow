@@ -1,0 +1,11 @@
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+sqlalchemy==2.0.31
+pydantic==2.7.4
+pydantic-settings==2.2.1
+python-dotenv==1.0.1
+alembic==1.13.2
+psycopg2-binary==2.9.9  # Postgres driver, needed once DATABASE_URL points at Supabase/Postgres
+httpx==0.27.0  # needed by fastapi.testclient.TestClient (tests/test_api_endpoints.py)
+bcrypt==4.1.3
+pyjwt==2.9.0

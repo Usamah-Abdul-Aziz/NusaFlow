@@ -1,0 +1,57 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Lets Render set up the backend service from this repo directly (New +
+# -> Blueprint in the Render dashboard, point it at this repo). Values
+# marked `sync: false` are secrets/environment-specific and must be set
+# manually in the Render dashboard after the service is created — they're
+# deliberately not committed here.
+#
+# rootDir: backend means Render treats backend/ as the service root even
+# though this file lives at the repo root (this is a monorepo with
+# backend/ and frontend/ side by side).
+
+services:
+  - type: web
+    name: nusaflow-backend
+    runtime: python
+    rootDir: backend
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # Migrations run on every boot. Safe to repeat — Alembic tracks what's
+    # already applied in the alembic_version table — and simpler than
+    # wiring up a separate release-phase step for a project this size.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: APP_ENV
+        value: production
+      # Paste Supabase's connection string as-is (Project Settings ->
+      # Database -> Connection string -> URI). Use the DIRECT connection
+      # (port 5432), not the pgbouncer transaction pooler (port 6543) —
+      # Render runs one persistent process with its own SQLAlchemy
+      # connection pool, which is what the direct connection is for; the
+      # pooler is meant for serverless/many-short-lived-connection
+      # scenarios this deployment doesn't have. SQLAlchemy accepts the
+      # bare `postgresql://` prefix Supabase gives you as-is — no need to
+      # rewrite it to `postgresql+psycopg2://`.
+      - key: DATABASE_URL
+        sync: false
+      # Render can generate this for you (recommended) — leave as
+      # generateValue rather than pasting your own unless you have a
+      # reason to control it directly.
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_API_KEY
+        sync: false
+      # The deployed Vercel URL(s), comma-separated, e.g.:
+      # https://nusaflow.vercel.app,https://nusaflow-git-main-you.vercel.app
+      # Must be set (not left at the "*" default) once allow_credentials
+      # is False that's not a hard security requirement, but an open
+      # allowlist still lets any site call this API from a browser, which
+      # isn't the intent for a real deployment.
+      - key: CORS_ORIGINS
+        sync: false
+      - key: CACHE_TTL
+        value: "300"
