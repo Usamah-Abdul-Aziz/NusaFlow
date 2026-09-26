@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -251,6 +251,11 @@ class DemandRecord(Base):
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
     record_date = Column(Date, nullable=False)
     demand_qty = Column(Integer, nullable=False, default=0)
+    # True when this row came from POST /demand/quick-estimate (a user's
+    # rough "about N units/day") rather than from the seed script or a
+    # real sales feed. Forecasts and replenishment built on such rows are
+    # still valid to compute, but the UI flags them as estimates.
+    is_estimated = Column(Boolean, nullable=False, default=False, server_default=false())
 
     product = relationship("Product", back_populates="demand_records")
     warehouse = relationship("Warehouse", back_populates="demand_records")

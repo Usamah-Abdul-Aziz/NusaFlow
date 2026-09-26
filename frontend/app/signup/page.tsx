@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { fetchJson, type AuthResponse } from '@/lib/api';
 import { setToken } from '@/lib/auth';
+import ActiveSessionNotice from '@/components/ActiveSessionNotice';
 
 export default function SignupPage() {
   const router = useRouter();
@@ -42,6 +43,8 @@ export default function SignupPage() {
           <p className="mb-6 text-sm text-slate-500">
             Starts empty — add your own suppliers, warehouses, and products once you're in.
           </p>
+
+          <ActiveSessionNotice />
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>

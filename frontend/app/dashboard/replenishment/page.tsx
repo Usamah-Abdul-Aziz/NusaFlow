@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { fetchJson, type ReplenishmentRecommendation } from '@/lib/api';
-import { ErrorState, LoadingState, PageHeader } from '@/components/ui';
+import { EstimatedDataBadge, ErrorState, LoadingState, PageHeader } from '@/components/ui';
 
 export default function ReplenishmentPage() {
   const [recommendations, setRecommendations] = useState<ReplenishmentRecommendation[]>([]);
@@ -54,7 +54,7 @@ export default function ReplenishmentPage() {
     <main className="p-6">
       <div className="mx-auto max-w-7xl">
         <PageHeader
-          eyebrow="Phase 6"
+          eyebrow="Analytics"
           title="Replenishment Recommendation"
           action={
             <button
@@ -111,7 +111,12 @@ export default function ReplenishmentPage() {
                       onClick={() => setSelectedId(r.id)}
                       className={`cursor-pointer ${selectedId === r.id ? 'bg-sky-50' : r.recommended_quantity > 0 ? 'bg-amber-50/50 hover:bg-amber-50' : 'hover:bg-slate-50'}`}
                     >
-                      <td className="px-4 py-3 font-medium text-slate-800">{r.product}</td>
+                      <td className="px-4 py-3 font-medium text-slate-800">
+                        <span className="flex items-center gap-2">
+                          {r.product}
+                          {r.is_estimated && <EstimatedDataBadge />}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">{r.warehouse}</td>
                       <td className="px-4 py-3">{r.lead_time_days}d</td>
                       <td className="px-4 py-3">{r.current_stock}</td>
@@ -139,7 +144,10 @@ export default function ReplenishmentPage() {
             <h2 className="mb-3 text-lg font-semibold text-slate-800">Why this number?</h2>
             {selected ? (
               <>
-                <p className="mb-4 text-sm font-medium text-slate-700">{selected.product} · {selected.warehouse}</p>
+                <p className="mb-4 flex flex-wrap items-center gap-2 text-sm font-medium text-slate-700">
+                  {selected.product} · {selected.warehouse}
+                  {selected.is_estimated && <EstimatedDataBadge />}
+                </p>
                 <p className="text-sm leading-relaxed text-slate-600">{selected.explanation}</p>
                 <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
                   <Row label="Lead time" value={`${selected.lead_time_days} day(s)`} />

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useState } from 'react';
 import { fetchJson, type AuthResponse } from '@/lib/api';
 import { setToken } from '@/lib/auth';
+import ActiveSessionNotice from '@/components/ActiveSessionNotice';
 
 function LoginForm() {
   const router = useRouter();
@@ -39,6 +40,8 @@ function LoginForm() {
         <div className="card p-6">
           <h1 className="mb-1 text-xl font-bold text-slate-900">Log in</h1>
           <p className="mb-6 text-sm text-slate-500">Access your workspace.</p>
+
+          <ActiveSessionNotice />
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>

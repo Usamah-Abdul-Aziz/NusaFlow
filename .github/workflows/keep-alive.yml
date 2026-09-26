@@ -1,0 +1,56 @@
+name: Keep backend warm
+
+# Render's free tier spins a web service down after ~15 minutes with no
+# inbound traffic; the next request then eats a cold start instead of
+# failing, but it is slow enough to look broken during a live demo. A
+# scheduled ping every 13 minutes keeps the service within the idle
+# window. The ping target is /api/v1/health, which returns static JSON
+# without touching the database — it costs nothing per request.
+#
+# The ping has to come from OUTSIDE the backend: while the service is
+# spun down its process is suspended, so an in-process timer (asyncio
+# task, APScheduler, startup loop) cannot run to keep itself awake.
+#
+# Caveats worth knowing:
+#  - GitHub Actions cron is best-effort. Runs can be delayed minutes when
+#    the runner fleet is busy, so set the cadence comfortably inside the
+#    15-minute window (13 min leaves ~2 min of slack).
+#  - GitHub disables scheduled workflows on repos with no activity for
+#    60 days. Re-enable from the Actions tab, or run the workflow
+#    manually via "Run workflow" (it takes an optional url input).
+#  - Render free plans get 750 instance-hours per month. Keeping a single
+#    service always-on consumes ~744, which fits but leaves almost no
+#    budget for other services on the same account.
+#  - Set NUSA_BACKEND_URL as a repository *variable* (not a secret — the
+#    URL is public and a secret would hide it from the logs this workflow
+#    relies on), e.g. https://nusaflow-backend.onrender.com
+
+on:
+  schedule:
+    - cron: '*/13 * * * *'
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Backend base URL to ping (overrides NUSA_BACKEND_URL)'
+        required: false
+        default: ''
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /api/v1/health
+        env:
+          BASE_URL: ${{ github.event.inputs.url || vars.NUSA_BACKEND_URL }}
+        run: |
+          set -u
+          if [ -z "${BASE_URL:-}" ]; then
+            echo "::error::No backend URL configured. Set the NUSA_BACKEND_URL repository variable (Settings → Secrets and variables → Actions → Variables → Actions variables), or pass the 'url' input when running this workflow manually."
+            exit 1
+          fi
+
+          URL="${BASE_URL%/}/api/v1/health"
+          echo "Pinging ${URL}"
+          # -f: fail on HTTP error, -s -S: quiet but show errors,
+          # --max-time: never hang on a slow cold start beyond 30s.
+          curl -fsS --max-time 30 -w '\nHTTP %{http_code} in %{time_total}s\n' "$URL"

@@ -100,6 +100,81 @@ class ShipmentAlreadyTerminalError(Exception):
     """Raised when trying to advance a shipment that has already delivered/cancelled."""
 
 
+# Manual shipments get their own numbering range (SH-M####) so they can
+# never collide with a seeded SH-1#### number, now or after a re-seed.
+_MANUAL_PREFIX = "SH-M"
+
+
+def _next_shipment_number(db: Session, workspace_id: int) -> str:
+    """The next unused manual shipment number for this workspace.
+
+    current-max + 1 rather than a row count: deletes would otherwise let a
+    count drift below a surviving max and hand out a number that already
+    exists, breaking the per-workspace unique constraint.
+    """
+    numbers = (
+        db.query(Shipment.shipment_number)
+        .filter(Shipment.workspace_id == workspace_id, Shipment.shipment_number.like(f"{_MANUAL_PREFIX}%"))
+        .all()
+    )
+    highest = 0
+    for (number,) in numbers:
+        suffix = number[len(_MANUAL_PREFIX) :]
+        if suffix.isdigit():
+            highest = max(highest, int(suffix))
+    return f"{_MANUAL_PREFIX}{highest + 1:04d}"
+
+
+def create_shipment(
+    db: Session,
+    workspace_id: int,
+    *,
+    product,
+    warehouse,
+    supplier,
+    quantity: int,
+    eta_date: date,
+    status: ShipmentStatus = ShipmentStatus.PENDING,
+) -> Shipment:
+    """Create one shipment row, already compatible with the rest of Phase 3.
+
+    The caller (main.py) has already verified that product/warehouse/supplier
+    all belong to this workspace. Two things here matter for that
+    compatibility:
+
+    - status defaults to PENDING, and "Shipment Created" is written as the
+      first event. advance_shipment's state machine decides the next step
+      from the LAST event, so a shipment with no Created event could never
+      take its first step ("Simulate next step" in the UI would read an
+      empty history and jump straight to Departed without a departure).
+      This mirrors exactly what seed.py writes for every seeded shipment.
+    - delay_days starts at 0 and status/delay are never guessed here —
+      effective_status()/compute_delay_days() derive the live truth from
+      dates, exactly as they do for seeded shipments.
+
+    eta_date is passed in, not computed here, because the caller decides
+    whether the user gave an absolute date or a transit-day lead time.
+    """
+    now = datetime.utcnow()
+    shipment = Shipment(
+        workspace_id=workspace_id,
+        shipment_number=_next_shipment_number(db, workspace_id),
+        product_id=product.id,
+        warehouse_id=warehouse.id,
+        supplier_id=supplier.id,
+        quantity=quantity,
+        eta_date=eta_date,
+        status=status,
+        delay_days=0,
+        created_at=now,
+    )
+    shipment.events = [ShipmentEvent(shipment_id=None, event_type="Shipment Created", event_time=now, details="Manually created shipment")]
+    db.add(shipment)
+    db.commit()
+    db.refresh(shipment)
+    return shipment
+
+
 def advance_shipment(db: Session, shipment: Shipment) -> ShipmentEvent:
     """Move a shipment one step forward in its lifecycle and return the new event.
 

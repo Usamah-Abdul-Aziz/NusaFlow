@@ -1,4 +1,5 @@
 import unittest
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -179,7 +180,9 @@ class ApiEndpointsTest(unittest.TestCase):
     def test_suppliers(self):
         r = self.client.get("/api/v1/suppliers")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.json()), 4)
+        # >=4, not ==4: other tests in this class (e.g. test_create_supplier)
+        # share this same seeded workspace and may add more before this runs.
+        self.assertGreaterEqual(len(r.json()), 4)
 
     def test_demand(self):
         # This is the endpoint that previously 500'd on every call because
@@ -317,6 +320,338 @@ class ApiEndpointsTest(unittest.TestCase):
     def test_simulation_validates_param_bounds(self):
         r = self.client.post("/api/v1/simulations/run", json={"demand_change_pct": 999999})
         self.assertEqual(r.status_code, 422)
+
+    # --- Master data CRUD (create/delete for empty-workspace usability) ---
+
+    def test_create_warehouse_and_reject_duplicate_code(self):
+        created = self.client.post("/api/v1/warehouses", json={"code": "WH-NEW", "name": "New DC", "city": "Bogor", "region": "Java"})
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(created.json()["code"], "WH-NEW")
+
+        dup = self.client.post("/api/v1/warehouses", json={"code": "WH-NEW", "name": "Dup", "city": "X", "region": "Y"})
+        self.assertEqual(dup.status_code, 409)
+
+    def test_create_product_and_reject_duplicate_sku(self):
+        created = self.client.post("/api/v1/products", json={"sku": "SKU-NEW", "name": "New Widget", "category": "General", "unit_cost": 9.99, "lead_time_days": 4})
+        self.assertEqual(created.status_code, 200)
+
+        dup = self.client.post("/api/v1/products", json={"sku": "SKU-NEW", "name": "Dup", "category": "General", "unit_cost": 1.0, "lead_time_days": 1})
+        self.assertEqual(dup.status_code, 409)
+
+    def test_create_supplier(self):
+        r = self.client.post("/api/v1/suppliers", json={"name": "Fresh Supplier", "lead_time_days": 3, "reliability_score": 0.95})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["name"], "Fresh Supplier")
+
+    def test_full_master_data_lifecycle_and_delete_guards(self):
+        warehouse = self.client.post("/api/v1/warehouses", json={"code": "WH-LIFE", "name": "Lifecycle DC", "city": "X", "region": "Y"}).json()
+        product = self.client.post("/api/v1/products", json={"sku": "SKU-LIFE", "name": "Lifecycle Widget", "category": "General", "unit_cost": 5.0, "lead_time_days": 5}).json()
+
+        inv = self.client.post(
+            "/api/v1/inventory",
+            json={"product_id": product["id"], "warehouse_id": warehouse["id"], "on_hand": 50, "safety_stock": 10, "reorder_point": 15, "incoming_qty": 0},
+        )
+        self.assertEqual(inv.status_code, 200)
+        inv_id = inv.json()["id"]
+
+        # Duplicate stock record for the same pair is rejected.
+        dup_inv = self.client.post(
+            "/api/v1/inventory",
+            json={"product_id": product["id"], "warehouse_id": warehouse["id"], "on_hand": 1, "safety_stock": 1, "reorder_point": 1, "incoming_qty": 0},
+        )
+        self.assertEqual(dup_inv.status_code, 409)
+
+        # Can't delete the warehouse or product while inventory references them.
+        self.assertEqual(self.client.delete(f"/api/v1/warehouses/{warehouse['id']}").status_code, 409)
+        self.assertEqual(self.client.delete(f"/api/v1/products/{product['id']}").status_code, 409)
+
+        # Remove the inventory record, then both deletes succeed.
+        self.assertEqual(self.client.delete(f"/api/v1/inventory/{inv_id}").status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/v1/warehouses/{warehouse['id']}").status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/v1/products/{product['id']}").status_code, 200)
+
+    def test_delete_supplier_blocked_by_shipment(self):
+        # The seeded demo data's suppliers all have shipments — pick one.
+        supplier_id = self.client.get("/api/v1/suppliers").json()[0]["id"]
+        r = self.client.delete(f"/api/v1/suppliers/{supplier_id}")
+        self.assertEqual(r.status_code, 409)
+
+    def test_inventory_create_rejects_cross_workspace_product(self):
+        # A product id that's real, but belongs to a DIFFERENT workspace's token.
+        other_signup = self.client.post(
+            "/api/v1/auth/signup",
+            json={"workspace_name": "Other CRUD Co", "display_name": "O", "email": "othercrud@example.com", "password": "hunter22222"},
+        ).json()
+        other_headers = {"Authorization": f"Bearer {other_signup['access_token']}"}
+        other_product = self.client.post(
+            "/api/v1/products",
+            json={"sku": "SKU-OTHER", "name": "Other Widget", "category": "General", "unit_cost": 1.0, "lead_time_days": 1},
+            headers=other_headers,
+        ).json()
+
+        warehouse = self.client.post("/api/v1/warehouses", json={"code": "WH-XCHK", "name": "X", "city": "X", "region": "Y"}).json()
+        r = self.client.post(
+            "/api/v1/inventory",
+            json={"product_id": other_product["id"], "warehouse_id": warehouse["id"], "on_hand": 1, "safety_stock": 1, "reorder_point": 1, "incoming_qty": 0},
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_create_shipment_rejects_cross_workspace_ids(self):
+        # Same isolation rule as above, for the new shipment endpoint: a
+        # supplier id that is real, but belongs to a different workspace.
+        other_signup = self.client.post(
+            "/api/v1/auth/signup",
+            json={"workspace_name": "Other Ship Co", "display_name": "O", "email": "othership@example.com", "password": "hunter22222"},
+        ).json()
+        other_headers = {"Authorization": f"Bearer {other_signup['access_token']}"}
+        other_supplier = self.client.post(
+            "/api/v1/suppliers",
+            json={"name": "Other Supplier", "lead_time_days": 3, "reliability_score": 0.9},
+            headers=other_headers,
+        ).json()
+
+        warehouse = self.client.post("/api/v1/warehouses", json={"code": "WH-SHIPX", "name": "X", "city": "X", "region": "Y"}).json()
+        product = self.client.post("/api/v1/products", json={"sku": "SKU-SHIPX", "name": "X", "category": "General", "unit_cost": 1.0, "lead_time_days": 1}).json()
+
+        r = self.client.post(
+            "/api/v1/shipments",
+            json={"product_id": product["id"], "warehouse_id": warehouse["id"], "supplier_id": other_supplier["id"], "quantity": 5, "transit_days": 4},
+        )
+        self.assertEqual(r.status_code, 404)
+
+
+class EmptyWorkspaceOnboardingTest(unittest.TestCase):
+    """The CLAUDE.md §4 user story, end to end through HTTP.
+
+    A workspace created through signup starts empty. Before §5.1/§5.2 that
+    meant it could never forecast, replenish, or track a shipment — those
+    features only had data to work with in the seeded demo workspace. This
+    class follows a fresh workspace from signup to a generated forecast and
+    a simulated shipment, so the gap stays closed at the endpoint level.
+
+    Deliberately its own class with its own database: the ApiEndpointsTest
+    workspace is seeded and several of its tests assert exact row counts
+    (80 shipments, 60 forecasts), which onboarding data would perturb.
+    Each test also gets its OWN workspace, created through signup — that
+    keeps every assertion absolute ("the list is empty", "90 days") and
+    therefore independent of test order within the class.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        clear_cache()
+        cls.engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=cls.engine)
+        cls.TestSession = sessionmaker(bind=cls.engine)
+
+        def override_get_db():
+            db = cls.TestSession()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override_get_db
+
+    @classmethod
+    def tearDownClass(cls):
+        app.dependency_overrides.clear()
+        clear_cache()
+
+    # Counter only used to keep each test's signup email unique — tests
+    # can't share a workspace, so they can't share a login either.
+    _signup_seq = 0
+
+    def _fresh_client(self) -> TestClient:
+        """A client for a brand-new empty workspace, via the real signup."""
+        type(self)._signup_seq += 1
+        signup = TestClient(app).post(
+            "/api/v1/auth/signup",
+            json={
+                "workspace_name": f"Onboarding Co {type(self)._signup_seq}",
+                "display_name": "New User",
+                "email": f"onboarding{type(self)._signup_seq}@example.com",
+                "password": "hunter22222",
+            },
+        )
+        self.assertEqual(signup.status_code, 200, signup.text)
+        return TestClient(app, headers={"Authorization": f"Bearer {signup.json()['access_token']}"})
+
+    def _make_pair(self, client: TestClient, code: str, sku: str, supplier_name: str, with_stock: bool = True) -> dict:
+        """Warehouse + product + supplier for a pair, optionally with stock."""
+        warehouse = client.post("/api/v1/warehouses", json={"code": code, "name": f"{code} DC", "city": "Bandung", "region": "Java"}).json()
+        product = client.post("/api/v1/products", json={"sku": sku, "name": f"{sku} Widget", "category": "General", "unit_cost": 3.0, "lead_time_days": 4}).json()
+        supplier = client.post("/api/v1/suppliers", json={"name": supplier_name, "lead_time_days": 4, "reliability_score": 0.92}).json()
+        if with_stock:
+            inventory = client.post(
+                "/api/v1/inventory",
+                json={"product_id": product["id"], "warehouse_id": warehouse["id"], "on_hand": 60, "safety_stock": 12, "reorder_point": 20, "incoming_qty": 0},
+            )
+            self.assertEqual(inventory.status_code, 200, inventory.text)
+        return {"warehouse": warehouse, "product": product, "supplier": supplier}
+
+    def test_new_workspace_starts_empty(self):
+        client = self._fresh_client()
+
+        self.assertEqual(client.get("/api/v1/shipments").json(), [])
+        self.assertEqual(client.get("/api/v1/forecasts").json(), [])
+        self.assertEqual(client.get("/api/v1/replenishment").json(), [])
+        self.assertEqual(client.get("/api/v1/demand").json(), [])
+
+    def test_quick_estimate_opens_forecast_and_replenishment(self):
+        client = self._fresh_client()
+        self._make_pair(client, "WH-EST", "SKU-EST", "Estimate Supplier")
+
+        estimate = client.post(
+            "/api/v1/demand/quick-estimate",
+            json={"sku": "SKU-EST", "warehouse": "WH-EST", "avg_units_per_day": 30},
+        )
+        self.assertEqual(estimate.status_code, 200, estimate.text)
+        body = estimate.json()
+        self.assertEqual(body["product"], "SKU-EST")
+        self.assertEqual(body["warehouse"], "WH-EST")
+        self.assertEqual(body["days_generated"], 90)
+        self.assertEqual(body["days_skipped_existing"], 0)
+        self.assertTrue(body["is_estimated"])
+
+        # Before §5.1 these two calls were the dead end: "not enough demand
+        # history yet". Now both succeed immediately after the estimate.
+        forecast = client.post("/api/v1/forecasts/generate?sku=SKU-EST&warehouse=WH-EST")
+        self.assertEqual(forecast.status_code, 200, forecast.text)
+        self.assertTrue(forecast.json()["is_estimated"], "a forecast built on estimated history must be flagged as one")
+
+        replenishment = client.post("/api/v1/replenishment/generate?sku=SKU-EST&warehouse=WH-EST")
+        self.assertEqual(replenishment.status_code, 200, replenishment.text)
+        self.assertTrue(replenishment.json()["is_estimated"])
+
+        # The flags carry through to the reads the UI renders, so a yellow
+        # badge can never be confused with seeded (real-demo) data.
+        self.assertTrue(client.get("/api/v1/forecasts").json()[0]["is_estimated"])
+        self.assertTrue(client.get("/api/v1/replenishment").json()[0]["is_estimated"])
+
+        detail = client.get("/api/v1/forecasts?sku=SKU-EST&warehouse=WH-EST&horizon_days=7").json()
+        self.assertTrue(detail["is_estimated"])
+        self.assertIn("quick-estimate", detail["methodology"].lower())
+
+        demand_rows = client.get("/api/v1/demand").json()
+        self.assertTrue(demand_rows)
+        self.assertTrue(all(row["is_estimated"] for row in demand_rows))
+
+    def test_quick_estimate_rejects_unknown_pair_and_pair_without_stock(self):
+        client = self._fresh_client()
+        # Master data exists but no inventory record — the estimate must
+        # refuse rather than manufacture history for a pair nobody stocks.
+        self._make_pair(client, "WH-NOINV", "SKU-NOINV", "No Stock Supplier", with_stock=False)
+
+        unknown = client.post("/api/v1/demand/quick-estimate", json={"sku": "NOPE", "warehouse": "WH-NOINV", "avg_units_per_day": 10})
+        self.assertEqual(unknown.status_code, 404)
+
+        no_stock = client.post("/api/v1/demand/quick-estimate", json={"sku": "SKU-NOINV", "warehouse": "WH-NOINV", "avg_units_per_day": 10})
+        self.assertEqual(no_stock.status_code, 404)
+        self.assertIn("inventory", no_stock.json()["detail"].lower())
+
+        # Nothing was written while rejecting.
+        self.assertEqual(client.get("/api/v1/demand").json(), [])
+
+    def test_quick_estimate_second_call_leaves_existing_days_untouched(self):
+        client = self._fresh_client()
+        self._make_pair(client, "WH-EST2", "SKU-EST2", "Estimate Supplier 2")
+
+        first = client.post("/api/v1/demand/quick-estimate", json={"sku": "SKU-EST2", "warehouse": "WH-EST2", "avg_units_per_day": 20})
+        self.assertEqual(first.json()["days_generated"], 90)
+
+        # Re-estimating the same pair must not overwrite or duplicate days.
+        second = client.post("/api/v1/demand/quick-estimate", json={"sku": "SKU-EST2", "warehouse": "WH-EST2", "avg_units_per_day": 20})
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["days_generated"], 0)
+        self.assertEqual(second.json()["days_skipped_existing"], 90)
+
+        # Every day still belongs to exactly one record: the re-estimate
+        # wrote nothing, and the 90 days from the first call are intact.
+        self.assertEqual(second.json()["days_generated"], 0)
+        rows = client.get("/api/v1/demand").json()
+        # The read endpoint caps at 20 rows (it's a preview, not an export),
+        # so this proves uniqueness of the surviving days, not their count.
+        dates = [row["date"] for row in rows]
+        self.assertEqual(len(dates), len(set(dates)))
+        self.assertEqual(len(dates), 20)
+
+    def test_create_shipment_then_simulate_advance(self):
+        client = self._fresh_client()
+        pair = self._make_pair(client, "WH-SHIP", "SKU-SHIP", "Ship Supplier")
+
+        created = client.post(
+            "/api/v1/shipments",
+            json={
+                "product_id": pair["product"]["id"],
+                "warehouse_id": pair["warehouse"]["id"],
+                "supplier_id": pair["supplier"]["id"],
+                "quantity": 12,
+                "transit_days": 5,
+            },
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        shipment = created.json()
+        # Manual shipments get their own numbering range, starting from 1
+        # in a fresh workspace, and begin pending (consistent with the
+        # Created -> Departed step the simulate button takes next).
+        self.assertEqual(shipment["shipment_number"], "SH-M0001")
+        self.assertEqual(shipment["status"], "pending")
+        self.assertEqual(shipment["eta_date"], (date.today() + timedelta(days=5)).isoformat())
+        self.assertEqual(shipment["delay_days"], 0)
+
+        events = client.get(f"/api/v1/shipments/{shipment['id']}/events").json()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "Shipment Created")
+
+        # The manually created shipment is indistinguishable from a seeded
+        # one once created — the existing advance flow works on it.
+        advance = client.post(f"/api/v1/shipments/{shipment['id']}/simulate/advance")
+        self.assertEqual(advance.status_code, 200, advance.text)
+        self.assertEqual(advance.json()["shipment"]["status"], "in_transit")
+
+        listed = client.get("/api/v1/shipments").json()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["id"], shipment["id"])
+
+    def test_create_shipment_validates_eta_and_status_and_quantity(self):
+        client = self._fresh_client()
+        pair = self._make_pair(client, "WH-SHIPV", "SKU-SHIPV", "Ship Supplier V")
+        base = {
+            "product_id": pair["product"]["id"],
+            "warehouse_id": pair["warehouse"]["id"],
+            "supplier_id": pair["supplier"]["id"],
+            "quantity": 3,
+        }
+
+        # Exactly one of eta_date / transit_days — not both, not neither.
+        both = client.post("/api/v1/shipments", json={**base, "eta_date": "2026-12-01", "transit_days": 5})
+        self.assertEqual(both.status_code, 422)
+
+        neither = client.post("/api/v1/shipments", json=base)
+        self.assertEqual(neither.status_code, 422)
+
+        # A new shipment can't be born already delivered/cancelled.
+        bad_status = client.post("/api/v1/shipments", json={**base, "transit_days": 5, "status": "delivered"})
+        self.assertEqual(bad_status.status_code, 422)
+
+        # eta_date can be given directly instead of a lead time.
+        direct = client.post("/api/v1/shipments", json={**base, "eta_date": (date.today() + timedelta(days=10)).isoformat()})
+        self.assertEqual(direct.status_code, 200)
+        self.assertEqual(direct.json()["eta_date"], (date.today() + timedelta(days=10)).isoformat())
+
+        # And unknown objects are rejected before anything is written: only
+        # the one valid request above survives in the list.
+        unknown_supplier = client.post("/api/v1/shipments", json={**base, "supplier_id": 999999, "transit_days": 5})
+        self.assertEqual(unknown_supplier.status_code, 404)
+
+        listed = client.get("/api/v1/shipments").json()
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(listed[0]["eta_date"], (date.today() + timedelta(days=10)).isoformat())
 
 
 if __name__ == "__main__":
