@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { CheckCircle2, RefreshCw } from 'lucide-react';
 import { fetchJson, type Alert, type AlertStatus } from '@/lib/api';
-import { AlertStatusBadge, ErrorState, LoadingState, PageHeader, SeverityBadge } from '@/components/ui';
+import { AlertStatusBadge, Button, ErrorState, LoadingState, PageHeader, SeverityBadge } from '@/components/ui';
 
 const STATUS_FILTERS: { label: string; value: AlertStatus | 'all' }[] = [
   { label: 'Open', value: 'OPEN' },
@@ -75,16 +76,12 @@ export default function AlertsPage() {
     <main className="p-6">
       <div className="mx-auto max-w-5xl">
         <PageHeader
-          eyebrow="Phase 4"
+          eyebrow="Monitoring"
           title="Alert Engine"
           action={
-            <button
-              onClick={handleRegenerate}
-              disabled={regenerating}
-              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
-            >
+            <Button onClick={handleRegenerate} loading={regenerating} variant="secondary" icon={RefreshCw}>
               {regenerating ? 'Running…' : 'Re-run alert engine'}
-            </button>
+            </Button>
           }
         />
 
@@ -123,22 +120,14 @@ export default function AlertsPage() {
                 <div className="flex shrink-0 items-center gap-2">
                   <AlertStatusBadge status={alert.status} />
                   {alert.status === 'OPEN' && (
-                    <button
-                      onClick={() => updateStatus(alert, 'ACKNOWLEDGED')}
-                      disabled={busyId === alert.id}
-                      className="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                    >
+                    <Button onClick={() => updateStatus(alert, 'ACKNOWLEDGED')} loading={busyId === alert.id} variant="secondary" size="sm">
                       Acknowledge
-                    </button>
+                    </Button>
                   )}
                   {alert.status !== 'RESOLVED' && (
-                    <button
-                      onClick={() => updateStatus(alert, 'RESOLVED')}
-                      disabled={busyId === alert.id}
-                      className="rounded-md bg-slate-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-                    >
+                    <Button onClick={() => updateStatus(alert, 'RESOLVED')} loading={busyId === alert.id} variant="primary" size="sm" icon={CheckCircle2}>
                       Resolve
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>

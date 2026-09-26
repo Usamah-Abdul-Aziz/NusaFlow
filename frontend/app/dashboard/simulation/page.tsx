@@ -177,7 +177,7 @@ export default function SimulationPage() {
   return (
     <main className="p-6">
       <div className="mx-auto max-w-7xl">
-        <PageHeader eyebrow="Phase 7" title="What-If Simulation" />
+        <PageHeader eyebrow="Analytics" title="What-If Simulation" />
         <p className="mb-6 max-w-3xl text-sm text-slate-600">
           Adjust the sliders to model a hypothetical — nothing here touches real inventory, shipment,
           or forecast data. Every number below is recomputed from a temporary copy of the current

@@ -8,8 +8,10 @@ from app.database import Base
 from app.models import Product, Shipment, ShipmentEvent, Supplier, Warehouse, Workspace
 from app.shipment_service import (
     ShipmentAlreadyTerminalError,
+    _next_shipment_number,
     advance_shipment,
     compute_delay_days,
+    create_shipment,
     effective_status,
     get_events,
 )
@@ -91,6 +93,96 @@ class ShipmentServiceTest(unittest.TestCase):
     def test_cancelled_always_zero_delay(self):
         shipment = self._make_shipment(status="cancelled", eta_date=date.today() - timedelta(days=30))
         self.assertEqual(compute_delay_days(shipment), 0)
+
+    # --- create_shipment (manual shipments, CLAUDE.md 5.2) ---
+
+    def test_create_shipment_starts_pending_with_created_event(self):
+        shipment = create_shipment(
+            self.db,
+            self.workspace.id,
+            product=self.product,
+            warehouse=self.warehouse,
+            supplier=self.supplier,
+            quantity=25,
+            eta_date=date.today() + timedelta(days=6),
+        )
+
+        # Manual shipments get their own SH-M#### range, so a brand-new
+        # workspace starts counting from 1 and can't collide with a seeded
+        # SH-1#### number.
+        self.assertEqual(shipment.shipment_number, "SH-M0001")
+        self.assertEqual(shipment.status, "pending")
+        self.assertEqual(shipment.delay_days, 0)
+        self.assertEqual(shipment.quantity, 25)
+        self.assertEqual(effective_status(shipment), "pending")
+
+        events = get_events(self.db, shipment.id)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].event_type, "Shipment Created")
+
+    def test_create_shipment_can_be_advanced_like_a_seeded_one(self):
+        # The whole point of 5.2: a manually created shipment must behave
+        # identically to a seeded one under the existing "Simulate next
+        # step" flow — including taking its FIRST step, which is only
+        # possible because create_shipment writes "Shipment Created".
+        shipment = create_shipment(
+            self.db,
+            self.workspace.id,
+            product=self.product,
+            warehouse=self.warehouse,
+            supplier=self.supplier,
+            quantity=10,
+            eta_date=date.today() + timedelta(days=6),
+        )
+
+        advance_shipment(self.db, shipment)  # Created -> Departed
+        self.assertEqual(shipment.status, "in_transit")
+        self.assertEqual(len(get_events(self.db, shipment.id)), 2)
+
+        advance_shipment(self.db, shipment)  # -> Checkpoint (still before eta)
+        advance_shipment(self.db, shipment)  # -> Delivered
+        self.assertEqual(shipment.status, "delivered")
+        self.assertEqual(shipment.delay_days, 0)
+
+    def test_create_shipment_in_transit_status(self):
+        shipment = create_shipment(
+            self.db,
+            self.workspace.id,
+            product=self.product,
+            warehouse=self.warehouse,
+            supplier=self.supplier,
+            quantity=4,
+            eta_date=date.today() + timedelta(days=2),
+            status="in_transit",
+        )
+        self.assertEqual(shipment.status, "in_transit")
+        self.assertEqual(effective_status(shipment), "in_transit")
+
+    def test_manual_shipment_numbers_are_unique_and_monotonic(self):
+        a = create_shipment(self.db, self.workspace.id, product=self.product, warehouse=self.warehouse, supplier=self.supplier, quantity=1, eta_date=date.today())
+        b = create_shipment(self.db, self.workspace.id, product=self.product, warehouse=self.warehouse, supplier=self.supplier, quantity=1, eta_date=date.today())
+        c = create_shipment(self.db, self.workspace.id, product=self.product, warehouse=self.warehouse, supplier=self.supplier, quantity=1, eta_date=date.today())
+
+        numbers = [a.shipment_number, b.shipment_number, c.shipment_number]
+        self.assertEqual(numbers, ["SH-M0001", "SH-M0002", "SH-M0003"])
+        self.assertEqual(len(set(numbers)), 3)
+
+    def test_manual_numbers_ignore_seeded_numbering_range(self):
+        # A seeded shipment already owns SH-1000; the manual counter must
+        # not start after it (that's how a collision would sneak in).
+        self._make_shipment(shipment_number="SH-1000")
+        self.db.commit()
+
+        self.assertEqual(_next_shipment_number(self.db, self.workspace.id), "SH-M0001")
+
+    def test_manual_number_uses_surviving_max_not_row_count(self):
+        # max+1, not count+1: a gap in the numbering (rows deleted directly
+        # in the DB, or a number reserved) must not make the generator hand
+        # out a number that already belongs to a surviving row.
+        self._make_shipment(shipment_number="SH-M0040")
+        self.db.commit()
+
+        self.assertEqual(_next_shipment_number(self.db, self.workspace.id), "SH-M0041")
 
     # --- advance_shipment lifecycle ---
 

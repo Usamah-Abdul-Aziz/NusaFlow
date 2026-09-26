@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { Boxes, PackageCheck, RotateCcw, ShieldAlert, TimerReset, Truck } from 'lucide-react';
 import { fetchJson, type Alert, type InventoryAnalysisResponse, type InventoryItem, type Overview, type ReplenishmentRecommendation, type ShipmentItem } from '@/lib/api';
 import { ErrorState, LoadingState, MetricCard, PageHeader, SeverityBadge, ShipmentStatusBadge } from '@/components/ui';
 
@@ -63,13 +64,13 @@ export default function HomePage() {
         />
 
         <section className="mb-8 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-          <MetricCard title="Inventory Health" value={`${overview?.inventory_health ?? 0}%`} tone="sky" />
-          <MetricCard title="Active Shipments" value={String(overview?.active_shipments ?? 0)} tone="amber" />
-          <MetricCard title="Stockout Risks" value={String(overview?.stockout_risk ?? 0)} tone="rose" />
-          <MetricCard title="Delayed Shipments" value={String(overview?.delayed_shipments ?? 0)} tone="orange" />
-          <MetricCard title="Supplier Quality" value={`${Math.round((overview?.supplier_quality ?? 0) * 100)}%`} tone="emerald" />
+          <MetricCard title="Inventory Health" value={`${overview?.inventory_health ?? 0}%`} tone="sky" icon={Boxes} />
+          <MetricCard title="Active Shipments" value={String(overview?.active_shipments ?? 0)} tone="amber" icon={Truck} />
+          <MetricCard title="Stockout Risks" value={String(overview?.stockout_risk ?? 0)} tone="rose" icon={ShieldAlert} />
+          <MetricCard title="Delayed Shipments" value={String(overview?.delayed_shipments ?? 0)} tone="orange" icon={TimerReset} />
+          <MetricCard title="Supplier Quality" value={`${Math.round((overview?.supplier_quality ?? 0) * 100)}%`} tone="emerald" icon={PackageCheck} />
           <Link href="/dashboard/replenishment">
-            <MetricCard title="Needs Reorder" value={String(needsReorderCount)} tone={needsReorderCount > 0 ? 'amber' : 'emerald'} />
+            <MetricCard title="Needs Reorder" value={String(needsReorderCount)} tone={needsReorderCount > 0 ? 'amber' : 'emerald'} icon={RotateCcw} />
           </Link>
         </section>
 

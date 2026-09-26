@@ -13,7 +13,7 @@ import {
   YAxis,
 } from 'recharts';
 import { fetchJson, type ForecastDetail, type ForecastSummary } from '@/lib/api';
-import { ErrorState, LoadingState, PageHeader } from '@/components/ui';
+import { EstimatedDataBadge, ErrorState, LoadingState, PageHeader } from '@/components/ui';
 
 const HORIZONS = [7, 14, 30] as const;
 
@@ -83,7 +83,7 @@ export default function ForecastPage() {
   return (
     <main className="p-6">
       <div className="mx-auto max-w-7xl">
-        <PageHeader eyebrow="Phase 5" title="Demand Forecasting" />
+        <PageHeader eyebrow="Analytics" title="Demand Forecasting" />
 
         <div className="grid gap-6 xl:grid-cols-[1fr_1.3fr]">
           <div className="card min-w-0 overflow-hidden">
@@ -114,7 +114,12 @@ export default function ForecastPage() {
                         onClick={() => setSelected({ sku: f.product, warehouse: f.warehouse })}
                         className={`cursor-pointer ${isSelected ? 'bg-sky-50' : 'hover:bg-slate-50'}`}
                       >
-                        <td className="px-4 py-3 font-medium text-slate-800">{f.product}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">
+                          <span className="flex items-center gap-2">
+                            {f.product}
+                            {f.is_estimated && <EstimatedDataBadge />}
+                          </span>
+                        </td>
                         <td className="px-4 py-3">{f.warehouse}</td>
                         <td className="px-4 py-3 text-xs">
                           <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-600">
@@ -136,7 +141,10 @@ export default function ForecastPage() {
             ) : (
               <>
                 <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold text-slate-800">{detail.product} · {detail.warehouse}</h2>
+                  <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-800">
+                    {detail.product} · {detail.warehouse}
+                    {detail.is_estimated && <EstimatedDataBadge />}
+                  </h2>
                   <div className="flex gap-1">
                     {HORIZONS.map((h) => (
                       <button
@@ -158,6 +166,12 @@ export default function ForecastPage() {
                 </p>
 
                 <ResponsiveContainer width="100%" height={320}>
+                  {/* An estimated pair draws in amber instead of sky blue so the
+                      whole chart reads as caution, matching the badge above —
+                      never the colours real-data forecasts use. */}
+                  {(() => {
+                    const series = detail.is_estimated ? '#d97706' : '#0ea5e9';
+                    return (
                   <ComposedChart data={chartData} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={30} />
@@ -172,7 +186,7 @@ export default function ForecastPage() {
                       dataKey="band"
                       name="Uncertainty band"
                       stroke="none"
-                      fill="#0ea5e9"
+                      fill={series}
                       fillOpacity={0.12}
                       connectNulls
                     />
@@ -181,13 +195,15 @@ export default function ForecastPage() {
                       type="monotone"
                       dataKey="estimated_demand"
                       name="Estimated demand"
-                      stroke="#0ea5e9"
+                      stroke={series}
                       strokeDasharray="5 3"
                       dot={false}
                       strokeWidth={2}
                       connectNulls={false}
                     />
                   </ComposedChart>
+                    );
+                  })()}
                 </ResponsiveContainer>
 
                 <p className="mt-3 text-xs italic text-slate-400">{detail.methodology}</p>

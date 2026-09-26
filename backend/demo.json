@@ -1,0 +1,1 @@
+{"access_token":"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwiaWF0IjoxNzkwNDA1MTE0LCJleHAiOjE3OTEwMDk5MTR9.vsR2vUUOnfi7mBVwMnglERRb7Ye3TLHJP2RqBn8AeCo","token_type":"bearer","user":{"id":1,"email":"demo@nusaflow.app","display_name":"Demo User"},"workspace":{"id":1,"name":"Nusantara Distribution","slug":"demo","is_demo":true}}

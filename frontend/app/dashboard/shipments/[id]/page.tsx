@@ -67,7 +67,7 @@ export default function ShipmentDetailPage({ params }: { params: { id: string } 
     <main className="p-6">
       <div className="mx-auto max-w-3xl">
         <Link href="/dashboard/shipments" className="mb-4 inline-block text-sm font-medium text-sky-700 hover:underline">← Back to shipments</Link>
-        <PageHeader eyebrow="Phase 3 · Shipment" title={shipment.shipment_number} />
+        <PageHeader eyebrow="Logistics" title={shipment.shipment_number} />
 
         <div className="card mb-6 grid grid-cols-2 gap-4 p-6 sm:grid-cols-3">
           <Field label="Status"><ShipmentStatusBadge status={shipment.status} /></Field>

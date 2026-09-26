@@ -72,6 +72,11 @@ PRODUCTS = [
 # identical pace everywhere (Jakarta DC is the busiest hub).
 WAREHOUSE_DEMAND_MULTIPLIER = {"WH-JKT": 1.3, "WH-BDG": 1.0, "WH-SBY": 0.8}
 
+# The +/-25% jitter applied to every generated demand day. Kept as a named
+# constant because demand_service.py's quick-estimate generator shares it
+# (see estimated_daily_demand below) — one place to tune, one behavior.
+NOISE_RANGE = (0.75, 1.25)
+
 
 def _weekday_factor(day: date) -> float:
     return 0.6 if day.weekday() >= 5 else 1.0
@@ -82,6 +87,46 @@ def _seasonal_factor(day_index: int, seasonal_window) -> float:
         return 1.0
     start, end, multiplier = seasonal_window
     return multiplier if start <= day_index <= end else 1.0
+
+
+def estimated_daily_demand(
+    base_rate: float,
+    day: date,
+    rng: random.Random,
+    day_index: int = 0,
+    seasonal_window=None,
+) -> int:
+    """One day of synthetic demand at roughly `base_rate` units/day.
+
+    This is the single source of the weekday + noise variation the whole
+    synthetic dataset uses — both seed_database() below and the on-demand
+    quick-estimate backfill (app/demand_service.py) call it, so a manually
+    seeded workspace's history is statistically shaped like the demo data
+    rather than following some second, subtly different generator.
+    (AGENTS.md 22.3: reuse existing abstractions rather than duplicating
+    behavior.)
+
+    Returns a rounded, non-negative integer.
+    """
+    noise = rng.uniform(*NOISE_RANGE)
+    qty = base_rate * _weekday_factor(day) * _seasonal_factor(day_index, seasonal_window) * noise
+    return max(0, round(qty))
+
+
+def mean_weekday_factor() -> float:
+    """Average of _weekday_factor across a week.
+
+    Because weekends run at 0.6x, a flat base rate does NOT average out to
+    itself. demand_service.py uses this to convert a user's "about N units
+    per day" into the base rate that, once weekday variation is applied,
+    actually averages N/day — so the number the user typed is the number
+    the generated history honors.
+    """
+    # Any Monday works: the factor depends only on the weekday, so any 7
+    # consecutive days see the same 5x1.0 + 2x0.6 cycle.
+    monday = date(2026, 1, 5)
+    return sum(_weekday_factor(monday + timedelta(days=i)) for i in range(7)) / 7
+
 
 
 def ensure_demo_workspace(db: Session) -> Workspace:
@@ -219,23 +264,20 @@ def seed_database(db: Session, workspace_id: int):
         low, high = TIERS[tier]["demand"]
         base = _RNG.uniform(low, high)
         for warehouse in warehouses:
-            wh_multiplier = WAREHOUSE_DEMAND_MULTIPLIER[warehouse.code]
+            # Pre-multiplied here (rather than inside the shared function)
+            # so estimated_daily_demand() itself stays a pure "base rate ->
+            # one varying day" primitive that the quick-estimate endpoint
+            # can call with a user-supplied rate. Same RNG draw order, so
+            # the seeded dataset is bit-for-bit unchanged.
+            base_rate = base * WAREHOUSE_DEMAND_MULTIPLIER[warehouse.code]
             for day_index in range(DEMAND_HISTORY_DAYS):
                 current_day = history_start + timedelta(days=day_index)
-                noise = _RNG.uniform(0.75, 1.25)
-                qty = (
-                    base
-                    * wh_multiplier
-                    * _weekday_factor(current_day)
-                    * _seasonal_factor(day_index, seasonal_window)
-                    * noise
-                )
                 demand_rows.append(
                     {
                         "product_id": product.id,
                         "warehouse_id": warehouse.id,
                         "record_date": current_day,
-                        "demand_qty": max(0, round(qty)),
+                        "demand_qty": estimated_daily_demand(base_rate, current_day, _RNG, day_index, seasonal_window),
                     }
                 )
     # Bulk insert: ~20 SKUs x 3 warehouses x 240 days is too many rows to

@@ -46,6 +46,32 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
   return res.json() as Promise<T>;
 }
 
+// Same job as fetchJson<MeResponse>('/api/v1/auth/me'), but for public
+// pages (landing, login, signup) that want to know whether a visitor
+// already has a session without the side effects fetchJson applies on 401.
+//
+// fetchJson redirects to /login when a token is missing or invalid — the
+// right thing inside /dashboard, but wrong on the landing page, where an
+// anonymous visitor with a stale cookie would get hauled into the login
+// flow for no reason. Here a 401 just means "no session": drop the stale
+// cookie so middleware stops gating on it, and return null.
+export async function getSession(): Promise<MeResponse | null> {
+  const token = getToken();
+  if (!token) return null;
+
+  try {
+    const res = await fetch('/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      if (res.status === 401) clearToken();
+      return null;
+    }
+    return (await res.json()) as MeResponse;
+  } catch {
+    // Network/backend-down — treat as no session rather than crashing the page.
+    return null;
+  }
+}
+
 // --- Overview ---
 
 export type Overview = {
@@ -72,6 +98,11 @@ export type InventoryItem = {
   days_of_inventory?: number | null;
   stockout_risk?: boolean;
 };
+
+// --- Master data (full records, for Add/Delete forms) ---
+
+export type WarehouseRecord = { id: number; code: string; name: string; city: string; region: string };
+export type ProductRecord = { id: number; sku: string; name: string; category: string; unit_cost: number; lead_time_days: number };
 
 export type InventoryAnalysisResponse = {
   items: InventoryItem[];
@@ -100,6 +131,17 @@ export type ShipmentEvent = {
   event_type: string;
   event_time: string;
   details: string | null;
+};
+
+export type ShipmentCreatePayload = {
+  product_id: number;
+  warehouse_id: number;
+  supplier_id: number;
+  quantity: number;
+  // Give exactly one — the backend turns a lead time into an eta_date.
+  eta_date?: string;
+  transit_days?: number;
+  status?: ShipmentStatus;
 };
 
 // --- Suppliers ---
@@ -132,6 +174,27 @@ export type Alert = {
   resolved_at: string | null;
 };
 
+// --- Demand history ---
+
+export type DemandRecord = {
+  product: string;
+  warehouse: string;
+  date: string;
+  demand_qty: number;
+  is_estimated: boolean;
+};
+
+export type QuickEstimateResponse = {
+  product: string;
+  warehouse: string;
+  days_generated: number;
+  days_skipped_existing: number;
+  start_date: string;
+  end_date: string;
+  avg_units_per_day: number;
+  is_estimated: boolean;
+};
+
 // --- Forecasts (Phase 5) ---
 
 export type ForecastSummary = {
@@ -142,6 +205,10 @@ export type ForecastSummary = {
   horizon_days: number;
   mae: number | null;
   mape: number | null;
+  // True when the underlying demand history came from the quick-estimate
+  // backfill rather than seeded/recorded data — the UI shows an amber badge
+  // so a well-derived guess is never mistaken for a measurement.
+  is_estimated?: boolean;
   generated_at: string;
 };
 
@@ -172,6 +239,7 @@ export type ReplenishmentRecommendation = {
   incoming_stock: number;
   recommended_quantity: number;
   explanation: string;
+  is_estimated?: boolean;
   generated_at: string;
 };
 
